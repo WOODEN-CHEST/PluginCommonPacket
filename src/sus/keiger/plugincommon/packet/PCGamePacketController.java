@@ -10,46 +10,24 @@ import sus.keiger.plugincommon.packet.serverbound.RenameItemPacket;
 import sus.keiger.plugincommon.packet.serverbound.ServerBoundGamePacket;
 
 import java.util.*;
-import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
 
 public class PCGamePacketController implements IGamePacketController, PacketListener
 {
     // Private fields.
     private final ProtocolManager _protocolManager;
     private final Plugin _plugin;
-    private final Map<PacketType, Consumer<PacketEvent>> _packetEventPropagators = new HashMap<>();
-
-    private final ListeningWhitelist _sendingWhitelist = ListeningWhitelist.newBuilder().types(
-            PacketType.Play.Server.UPDATE_HEALTH,
-            PacketType.Play.Server.PLAYER_INFO,
-            PacketType.Play.Server.PLAYER_INFO_REMOVE).normal().build();
-
-    private final ListeningWhitelist _receivingWhitelist = ListeningWhitelist.newBuilder().types().build();
+    private final ListeningWhitelist _sendingWhitelist;
+    private final ListeningWhitelist _receivingWhitelist;
+    private final Set<Class<? extends GamePacket>> _listenedPackets = new HashSet<>();
 
 
 
     /* Packet types. */
     private final PCPluginEvent<GamePacketEvent<? extends GamePacket>> _packetSendEvent = new PCPluginEvent<>();
     private final PCPluginEvent<GamePacketEvent<? extends GamePacket>> _packetReceiveEvent = new PCPluginEvent<>();
-
-
-    /* Client-bound. */
-    private final PCPluginEvent<GamePacketEvent<SetHealthPacket>>
-            _setHealthPacketEvent = new PCPluginEvent<>();
-    private final PCPluginEvent<GamePacketEvent<PlayerInfoUpdatePacket>>
-            _playerInfoUpdatePacketEvent = new PCPluginEvent<>();
-    private final PCPluginEvent<GamePacketEvent<PlayerInfoRemovePacket>>
-            _playerInfoRemovePacketEvent = new PCPluginEvent<>();
-    private final PCPluginEvent<GamePacketEvent<UnloadChunkPacket>>
-            _unloadChunkPacketEvent = new PCPluginEvent<>();
-
-    private final PCPluginEvent<GamePacketEvent<UpdateAttributePacket>>
-            _updateAttributePacket = new PCPluginEvent<>();
-
-
-    /* Server-bound. */
-    private final PCPluginEvent<GamePacketEvent<RenameItemPacket>>
-            _renameItemEvent = new PCPluginEvent<>();
+    private final Map<PacketType, PacketData<?>> _recognizedPackets = new HashMap<>();
 
 
     // Constructors.
@@ -58,74 +36,85 @@ public class PCGamePacketController implements IGamePacketController, PacketList
         _protocolManager = Objects.requireNonNull(protocolManager, "protocolManager is null");
         _plugin = Objects.requireNonNull(plugin, "plugin is null");
 
-        _packetEventPropagators.put(PacketType.Play.Server.UPDATE_HEALTH, this::OnSetHealthSending);
-        _packetEventPropagators.put(PacketType.Play.Server.PLAYER_INFO, this::OnPlayerInfoUpdateSending);
-        _packetEventPropagators.put(PacketType.Play.Server.PLAYER_INFO_REMOVE, this::OnPlayerInfoRemoveSending);
-        _packetEventPropagators.put(PacketType.Play.Server.UNLOAD_CHUNK, this::OnUnloadChunkSending);
+        RegisterPacket(PacketType.Play.Server.UPDATE_HEALTH, SetHealthPacket.class, SetHealthPacket::new);
+        RegisterPacket(PacketType.Play.Server.PLAYER_INFO, PlayerInfoUpdatePacket.class, PlayerInfoUpdatePacket::new);
+        RegisterPacket(PacketType.Play.Server.PLAYER_INFO_REMOVE, PlayerInfoRemovePacket.class, PlayerInfoRemovePacket::new);
+        RegisterPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION, SetBlockDestroyStagePacket.class, SetBlockDestroyStagePacket::new);
+        RegisterPacket(PacketType.Play.Client.ITEM_NAME, RenameItemPacket.class, RenameItemPacket::new);
 
-        _packetEventPropagators.put(PacketType.Play.Client.ITEM_NAME, this::OnItemRenamePacketReceiving);
+        _sendingWhitelist = ListeningWhitelist.newBuilder().types(GetRegisteredPacketTypes(false)).build();
+        _receivingWhitelist = ListeningWhitelist.newBuilder().types(GetRegisteredPacketTypes(true)).build();
     }
 
 
 
     // Private methods.
+    private PacketType[] GetRegisteredPacketTypes(boolean isServerSentPacket)
+    {
+        return _recognizedPackets.keySet()
+                .stream()
+                .filter(type -> isServerSentPacket ? type.isServer() : type.isClient())
+                .toArray(PacketType[]::new);
+    }
+
+
+    /* Packet generic methods. */
+    private <T extends GamePacket> void RegisterPacket(PacketType type,
+                                                       Class<T> packetClass,
+                                                       Function<PacketContainer, T> packetConstructor)
+    {
+        PacketData<T> Data = new PacketData<>(type,
+                packetConstructor,
+                packetClass,
+                new PCPluginEvent<>());
+
+        _recognizedPackets.put(type, Data);
+    }
+
     private void PropagatePacket(PacketEvent event)
     {
-        Consumer<PacketEvent> Propagator = _packetEventPropagators.get(event.getPacketType());
-        if (Propagator == null)
+        PacketData<?> Data = _recognizedPackets.get(event.getPacketType());
+        if (Data == null)
         {
             return;
         }
 
-        Propagator.accept(event);
+        PCPluginEvent<GamePacketEvent<? extends GamePacket>> GenericEvent =
+                Data.PacketType.isClient() ? _packetReceiveEvent : _packetSendEvent;
+
+        FirePacketEvent(event, GenericEvent, Data);
     }
 
     private <T extends GamePacket>
     void FirePacketEvent(PacketEvent sourceEvent,
                          PCPluginEvent<GamePacketEvent<? extends GamePacket>> genericEvent,
-                         PCPluginEvent<GamePacketEvent<T>> event,
-                         T packet)
+                         PacketData<T> packetData)
     {
-        GamePacketEvent<T> PacketEvent = new GamePacketEvent<>(packet, sourceEvent.getPlayer());
+        if (!_listenedPackets.contains(packetData.PacketClass))
+        {
+            return;
+        }
+
+        T Packet = packetData.Constructor.apply(sourceEvent.getPacket());
+
+        GamePacketEvent<T> PacketEvent = new GamePacketEvent<>(Packet, sourceEvent.getPlayer());
         genericEvent.FireEvent(PacketEvent);
-        event.FireEvent(PacketEvent);
+        packetData.IOEvent.FireEvent(PacketEvent);
         sourceEvent.setCancelled(PacketEvent.GetIsCancelled());
 
         if (!PacketEvent.GetIsCancelled())
         {
-            sourceEvent.setPacket(packet.CreatePacketContainer(_protocolManager));
+            sourceEvent.setPacket(Packet.CreatePacketContainer(_protocolManager));
         }
     }
 
-    private void OnSetHealthSending(PacketEvent event)
+    @SuppressWarnings("unchecked") // Yay!
+    private <T> PCPluginEvent<T> GetPacketByTypeOrThrow(PacketType type)
     {
-        FirePacketEvent(event, _packetSendEvent, _setHealthPacketEvent,
-                new SetHealthPacket(event.getPacket()));
-    }
-
-    private void OnPlayerInfoUpdateSending(PacketEvent event)
-    {
-        FirePacketEvent(event, _packetSendEvent, _playerInfoUpdatePacketEvent,
-                new PlayerInfoUpdatePacket(event.getPacket()));
-    }
-
-    private void OnPlayerInfoRemoveSending(PacketEvent event)
-    {
-        FirePacketEvent(event, _packetSendEvent, _playerInfoRemovePacketEvent,
-                new PlayerInfoRemovePacket(event.getPacket()));
-    }
-
-
-    private void OnUnloadChunkSending(PacketEvent event)
-    {
-        FirePacketEvent(event, _packetSendEvent, _unloadChunkPacketEvent,
-                new UnloadChunkPacket(event.getPacket()));
-    }
-
-    private void OnItemRenamePacketReceiving(PacketEvent event)
-    {
-        FirePacketEvent(event, _packetReceiveEvent, _renameItemEvent,
-                new RenameItemPacket(event.getPacket()));
+        return (PCPluginEvent<T>) Optional.of(type)
+                .map(_recognizedPackets::get)
+                .map(PacketData::IOEvent)
+                .orElseThrow();
     }
 
 
@@ -171,6 +160,24 @@ public class PCGamePacketController implements IGamePacketController, PacketList
     }
 
     @Override
+    public void AddPacketToListen(Class<? extends GamePacket> packetClass)
+    {
+        _listenedPackets.add(Objects.requireNonNull(packetClass, "packetClass is null"));
+    }
+
+    @Override
+    public void RemovePacketFromListen(Class<? extends GamePacket> packetClass)
+    {
+        _listenedPackets.remove(Objects.requireNonNull(packetClass, "packetClass is null"));
+    }
+
+    @Override
+    public void ClearPacketListenList()
+    {
+        _listenedPackets.clear();
+    }
+
+    @Override
     public PCPluginEvent<GamePacketEvent<? extends GamePacket>> GetPacketSendEvent()
     {
         return _packetSendEvent;
@@ -185,31 +192,37 @@ public class PCGamePacketController implements IGamePacketController, PacketList
     @Override
     public PCPluginEvent<GamePacketEvent<SetHealthPacket>> GetSetHealthPacketEvent()
     {
-        return _setHealthPacketEvent;
+        return GetPacketByTypeOrThrow(PacketType.Play.Server.UPDATE_HEALTH);
     }
 
     @Override
     public PCPluginEvent<GamePacketEvent<PlayerInfoUpdatePacket>> GetPlayerInfoUpdatePacketEvent()
     {
-        return _playerInfoUpdatePacketEvent;
+        return GetPacketByTypeOrThrow(PacketType.Play.Server.PLAYER_INFO);
     }
 
     @Override
     public PCPluginEvent<GamePacketEvent<PlayerInfoRemovePacket>> GetPlayerInfoRemovePacketEvent()
     {
-        return _playerInfoRemovePacketEvent;
+        return GetPacketByTypeOrThrow(PacketType.Play.Server.PLAYER_INFO_REMOVE);
     }
 
     @Override
     public PCPluginEvent<GamePacketEvent<UpdateAttributePacket>> GetUpdateAttributesPacketEvent()
     {
-        return _updateAttributePacket;
+        return GetPacketByTypeOrThrow(PacketType.Play.Server.UPDATE_ATTRIBUTES);
+    }
+
+    @Override
+    public PCPluginEvent<GamePacketEvent<SetBlockDestroyStagePacket>> GetBlockDestroyStageEvent()
+    {
+        return GetPacketByTypeOrThrow(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
     }
 
     @Override
     public PCPluginEvent<GamePacketEvent<RenameItemPacket>> GetRenameItemPacketEvent()
     {
-        return _renameItemEvent;
+        return GetPacketByTypeOrThrow(PacketType.Play.Client.ITEM_NAME);
     }
 
     @Override
@@ -240,5 +253,14 @@ public class PCGamePacketController implements IGamePacketController, PacketList
     public Plugin getPlugin()
     {
         return _plugin;
+    }
+
+
+    // Types.
+    private record PacketData<T extends GamePacket>(PacketType PacketType,
+                                                    Function<PacketContainer, T> Constructor,
+                                                    Class<T> PacketClass,
+                                                    PCPluginEvent<GamePacketEvent<T>> IOEvent)
+    {
     }
 }

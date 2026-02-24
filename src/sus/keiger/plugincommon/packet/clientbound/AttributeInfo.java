@@ -2,7 +2,6 @@ package sus.keiger.plugincommon.packet.clientbound;
 
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeModifier;
-import org.bukkit.entity.LivingEntity;
 
 import java.util.Collection;
 import java.util.Collections;

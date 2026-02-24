@@ -9,7 +9,7 @@ import java.util.Objects;
 public class RenameItemPacket extends ServerBoundGamePacket
 {
     // Static fields.
-    public static final int ID = 0x2E;
+    public static final int ID = 0x2F;
 
 
     // Private fields.
