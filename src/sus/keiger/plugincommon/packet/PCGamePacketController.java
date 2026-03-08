@@ -2,10 +2,12 @@ package sus.keiger.plugincommon.packet;
 
 import com.comphenix.protocol.*;
 import com.comphenix.protocol.events.*;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import sus.keiger.plugincommon.PCPluginEvent;
 import sus.keiger.plugincommon.packet.clientbound.*;
+import sus.keiger.plugincommon.packet.serverbound.PlayerActionPacket;
 import sus.keiger.plugincommon.packet.serverbound.RenameItemPacket;
 import sus.keiger.plugincommon.packet.serverbound.ServerBoundGamePacket;
 
@@ -40,21 +42,20 @@ public class PCGamePacketController implements IGamePacketController, PacketList
         RegisterPacket(PacketType.Play.Server.PLAYER_INFO, PlayerInfoUpdatePacket.class, PlayerInfoUpdatePacket::new);
         RegisterPacket(PacketType.Play.Server.PLAYER_INFO_REMOVE, PlayerInfoRemovePacket.class, PlayerInfoRemovePacket::new);
         RegisterPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION, SetBlockDestroyStagePacket.class, SetBlockDestroyStagePacket::new);
-        RegisterPacket(PacketType.Play.Client.ITEM_NAME, RenameItemPacket.class, RenameItemPacket::new);
 
-        _sendingWhitelist = ListeningWhitelist.newBuilder().types(GetRegisteredPacketTypes(false)).build();
-        _receivingWhitelist = ListeningWhitelist.newBuilder().types(GetRegisteredPacketTypes(true)).build();
+        RegisterPacket(PacketType.Play.Client.ITEM_NAME, RenameItemPacket.class, RenameItemPacket::new);
+        RegisterPacket(PacketType.Play.Client.ENTITY_ACTION, PlayerActionPacket.class, PlayerActionPacket::new);
+
+        _sendingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
+        _receivingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
     }
 
 
 
     // Private methods.
-    private PacketType[] GetRegisteredPacketTypes(boolean isServerSentPacket)
+    private PacketType[] GetRegisteredPacketTypes()
     {
-        return _recognizedPackets.keySet()
-                .stream()
-                .filter(type -> isServerSentPacket ? type.isServer() : type.isClient())
-                .toArray(PacketType[]::new);
+        return _recognizedPackets.keySet().toArray(PacketType[]::new);
     }
 
 
@@ -223,6 +224,12 @@ public class PCGamePacketController implements IGamePacketController, PacketList
     public PCPluginEvent<GamePacketEvent<RenameItemPacket>> GetRenameItemPacketEvent()
     {
         return GetPacketByTypeOrThrow(PacketType.Play.Client.ITEM_NAME);
+    }
+
+    @Override
+    public PCPluginEvent<GamePacketEvent<PlayerActionPacket>> GetPlayerActionPacketEvent()
+    {
+        return GetPacketByTypeOrThrow(PacketType.Play.Client.ENTITY_ACTION);
     }
 
     @Override

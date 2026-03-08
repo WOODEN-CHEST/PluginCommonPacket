@@ -14,6 +14,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     public static final int ID = 0x05;
     public static final int STAGE_MIN = 0;
     public static final int STAGE_MAX = 9;
+    public static final int STAGE_NONE = -1;
 
 
     // Fields.
@@ -46,7 +47,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
 
     public void SetStage(int stage)
     {
-        _stage = Math.max(STAGE_MIN, Math.min(STAGE_MAX, stage));
+        _stage = (stage == STAGE_NONE) ? stage : Math.max(STAGE_MIN, Math.min(STAGE_MAX, stage));
     }
 
     public int GetCauseEntityID()

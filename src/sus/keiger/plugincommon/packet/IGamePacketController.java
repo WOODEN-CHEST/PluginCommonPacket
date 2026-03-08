@@ -3,6 +3,7 @@ package sus.keiger.plugincommon.packet;
 import org.bukkit.entity.Player;
 import sus.keiger.plugincommon.PCPluginEvent;
 import sus.keiger.plugincommon.packet.clientbound.*;
+import sus.keiger.plugincommon.packet.serverbound.PlayerActionPacket;
 import sus.keiger.plugincommon.packet.serverbound.RenameItemPacket;
 import sus.keiger.plugincommon.packet.serverbound.ServerBoundGamePacket;
 
@@ -31,4 +32,6 @@ public interface IGamePacketController
     PCPluginEvent<GamePacketEvent<SetBlockDestroyStagePacket>> GetBlockDestroyStageEvent();
 
     PCPluginEvent<GamePacketEvent<RenameItemPacket>> GetRenameItemPacketEvent();
+
+    PCPluginEvent<GamePacketEvent<PlayerActionPacket>> GetPlayerActionPacketEvent();
 }
