@@ -1,25 +1,27 @@
 package sus.keiger.plugincommon.packet;
 
+import com.comphenix.protocol.wrappers.EnumWrappers;
+
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 
 public enum PacketBlockFace
 {
-    Bottom(0),
-    Top(1),
-    North(2),
-    South(3),
-    West(4),
-    East(5);
+    Bottom(EnumWrappers.Direction.DOWN),
+    Top(EnumWrappers.Direction.UP),
+    North(EnumWrappers.Direction.NORTH),
+    South(EnumWrappers.Direction.SOUTH),
+    West(EnumWrappers.Direction.WEST),
+    East(EnumWrappers.Direction.EAST);
 
 
     // Private static fields.
-    private static final Map<Integer, PacketBlockFace> _statusIDToStatus = new HashMap<>();
+    private static final Map<EnumWrappers.Direction, PacketBlockFace> _statusIDToStatus = new HashMap<>();
 
 
     // Private fields.
-    private final int _faceID;
+    private final EnumWrappers.Direction _direction;
 
 
     // Initializers.
@@ -27,28 +29,28 @@ public enum PacketBlockFace
     {
         for (PacketBlockFace status : values())
         {
-            _statusIDToStatus.put(status._faceID, status);
+            _statusIDToStatus.put(status._direction, status);
         }
     }
 
 
     // Constructors.
-    PacketBlockFace(int statusID)
+    PacketBlockFace(EnumWrappers.Direction direction)
     {
-        _faceID = statusID;
+        _direction = direction;
     }
 
 
     // Static methods.
-    public static Optional<PacketBlockFace> GetFaceByID(int faceID)
+    public static Optional<PacketBlockFace> GetFaceByDirection(EnumWrappers.Direction direction)
     {
-        return Optional.ofNullable(_statusIDToStatus.get(faceID));
+        return Optional.ofNullable(_statusIDToStatus.get(direction));
     }
 
 
     // Methods.
-    public int GetFaceID()
+    public EnumWrappers.Direction GetDirection()
     {
-        return _faceID;
+        return _direction;
     }
 }

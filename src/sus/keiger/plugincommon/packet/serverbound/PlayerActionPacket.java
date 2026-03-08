@@ -1,7 +1,10 @@
 package sus.keiger.plugincommon.packet.serverbound;
 
+import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolManager;
 import com.comphenix.protocol.events.PacketContainer;
+import com.comphenix.protocol.wrappers.BlockPosition;
+import com.comphenix.protocol.wrappers.EnumWrappers;
 import org.bukkit.util.Vector;
 import sus.keiger.plugincommon.packet.PacketBlockFace;
 
@@ -30,10 +33,10 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     {
         super(ID);
 
-        PlayerActionStatus.GetStatusByID(packet.getIntegers().read(0)).ifPresent(this::SetAction);
+        PlayerActionStatus.GetStatusByDigType(packet.getPlayerDigTypes().read(0)).ifPresent(this::SetAction);
         SetPosition(packet.getBlockPositionModifier().read(0).toVector());
-        PacketBlockFace.GetFaceByID(packet.getBytes().read(0)).ifPresent(this::SetFace);
-        SetSequence(packet.getIntegers().read(1));
+        PacketBlockFace.GetFaceByDirection(packet.getDirections().read(0)).ifPresent(this::SetFace);
+        SetSequence(packet.getIntegers().read(0));
     }
 
 
@@ -83,6 +86,13 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     @Override
     public PacketContainer CreatePacketContainer(ProtocolManager protocolManager)
     {
-        return null;
+        PacketContainer Container = protocolManager.createPacket(PacketType.Play.Client.BLOCK_DIG);
+
+        Container.getPlayerDigTypes().write(0, _action.GetDigType());
+        Container.getBlockPositionModifier().write(0, new BlockPosition(_position));
+        Container.getDirections().write(0, _face.GetDirection());
+        Container.getIntegers().write(0, _sequence);
+
+        return Container;
     }
 }

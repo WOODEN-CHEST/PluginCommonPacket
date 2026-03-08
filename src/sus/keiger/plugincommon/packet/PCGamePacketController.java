@@ -44,7 +44,7 @@ public class PCGamePacketController implements IGamePacketController, PacketList
         RegisterPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION, SetBlockDestroyStagePacket.class, SetBlockDestroyStagePacket::new);
 
         RegisterPacket(PacketType.Play.Client.ITEM_NAME, RenameItemPacket.class, RenameItemPacket::new);
-        RegisterPacket(PacketType.Play.Client.ENTITY_ACTION, PlayerActionPacket.class, PlayerActionPacket::new);
+        RegisterPacket(PacketType.Play.Client.BLOCK_DIG, PlayerActionPacket.class, PlayerActionPacket::new);
 
         _sendingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
         _receivingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
@@ -74,9 +74,11 @@ public class PCGamePacketController implements IGamePacketController, PacketList
 
     private void PropagatePacket(PacketEvent event)
     {
+        Bukkit.getLogger().info("Propagating packet: " + event.getPacketType());
         PacketData<?> Data = _recognizedPackets.get(event.getPacketType());
         if (Data == null)
         {
+            Bukkit.getLogger().warning("Packet type not recognized: " + event.getPacketType());
             return;
         }
 
@@ -229,7 +231,7 @@ public class PCGamePacketController implements IGamePacketController, PacketList
     @Override
     public PCPluginEvent<GamePacketEvent<PlayerActionPacket>> GetPlayerActionPacketEvent()
     {
-        return GetPacketByTypeOrThrow(PacketType.Play.Client.ENTITY_ACTION);
+        return GetPacketByTypeOrThrow(PacketType.Play.Client.BLOCK_DIG);
     }
 
     @Override

@@ -4,7 +4,10 @@ import com.comphenix.protocol.PacketType;
 import com.comphenix.protocol.ProtocolManager;
 import com.comphenix.protocol.events.PacketContainer;
 import com.comphenix.protocol.wrappers.BlockPosition;
+import com.comphenix.protocol.wrappers.EnumWrappers;
+import org.bukkit.entity.Entity;
 import org.bukkit.util.Vector;
+import sus.keiger.plugincommon.packet.UninitializedPacketException;
 
 import java.util.Objects;
 
@@ -19,7 +22,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
 
     // Fields.
     private int _stage = STAGE_MIN;
-    private int _causeEntity = 0;
+    private Entity _causeEntity = null;
     private Vector _blockLocation = new Vector(0, 0, 0);
 
 
@@ -33,9 +36,9 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     {
         super(ID);
 
-        SetCauseEntityID(packet.getIntegers().read(0));
+        SetCauseEntityID(packet.getEntityModifier().read(0));
         SetBlockLocation(packet.getBlockPositionModifier().read(0).toVector());
-        SetStage(packet.getBytes().read(0));
+        SetStage(packet.getIntegers().read(0));
     }
 
 
@@ -71,15 +74,23 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     }
 
 
+    // Private methods.
+
+
     // Inherited methods.
     @Override
     public PacketContainer CreatePacketContainer(ProtocolManager protocolManager)
     {
+        if (_causeEntity == null)
+        {
+            throw new UninitializedPacketException("Entity not initialized.");
+        }
+
         PacketContainer Packet = protocolManager.createPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
 
-        Packet.getIntegers().write(0, _causeEntity);
+        Packet.getent().write(0, _causeEntity);
         Packet.getBlockPositionModifier().write(0, new BlockPosition(_blockLocation));
-        Packet.getBytes().write(0, (byte) _stage);
+        Packet.getIntegers().write(0, _stage);
 
         return Packet;
     }
