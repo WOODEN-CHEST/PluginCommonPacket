@@ -47,7 +47,8 @@ public class PCGamePacketController implements IGamePacketController, PacketList
         RegisterPacket(PacketType.Play.Client.BLOCK_DIG, PlayerActionPacket.class, PlayerActionPacket::new);
 
         _sendingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
-        _receivingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
+        _receivingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes())
+                .options(Collections.singletonList(ListenerOptions.SYNC)).build();
     }
 
 
