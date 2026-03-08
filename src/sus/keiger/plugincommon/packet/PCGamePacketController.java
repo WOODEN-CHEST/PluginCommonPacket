@@ -74,11 +74,9 @@ public class PCGamePacketController implements IGamePacketController, PacketList
 
     private void PropagatePacket(PacketEvent event)
     {
-        Bukkit.getLogger().info("Propagating packet: " + event.getPacketType());
         PacketData<?> Data = _recognizedPackets.get(event.getPacketType());
         if (Data == null)
         {
-            Bukkit.getLogger().warning("Packet type not recognized: " + event.getPacketType());
             return;
         }
 

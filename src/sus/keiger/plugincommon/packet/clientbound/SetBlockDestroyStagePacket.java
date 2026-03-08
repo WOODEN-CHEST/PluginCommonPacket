@@ -22,7 +22,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
 
     // Fields.
     private int _stage = STAGE_MIN;
-    private Entity _causeEntity = null;
+    private int _causeEntity = 0;
     private Vector _blockLocation = new Vector(0, 0, 0);
 
 
@@ -36,9 +36,9 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     {
         super(ID);
 
-        SetCauseEntityID(packet.getEntityModifier().read(0));
+        SetCauseEntityID(packet.getIntegers().read(0));
         SetBlockLocation(packet.getBlockPositionModifier().read(0).toVector());
-        SetStage(packet.getIntegers().read(0));
+        SetStage(packet.getBytes().read(0));
     }
 
 
@@ -81,16 +81,11 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     @Override
     public PacketContainer CreatePacketContainer(ProtocolManager protocolManager)
     {
-        if (_causeEntity == null)
-        {
-            throw new UninitializedPacketException("Entity not initialized.");
-        }
-
         PacketContainer Packet = protocolManager.createPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION);
 
-        Packet.getent().write(0, _causeEntity);
+        Packet.getIntegers().write(0, _causeEntity);
         Packet.getBlockPositionModifier().write(0, new BlockPosition(_blockLocation));
-        Packet.getIntegers().write(0, _stage);
+        Packet.getIntegers().write(1, _stage);
 
         return Packet;
     }
