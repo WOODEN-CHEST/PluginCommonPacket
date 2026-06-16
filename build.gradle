@@ -1,0 +1,180 @@
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+
+plugins {
+    id 'java-library'
+}
+
+def dependencyUrlsFile = layout.projectDirectory.file('gradle/dependency-urls.properties')
+def dependencyUrls = new Properties()
+dependencyUrlsFile.asFile.withInputStream { dependencyUrls.load(it) }
+
+def externalDepsDir = layout.buildDirectory.dir('external-deps')
+def downloadsDir = externalDepsDir.map { it.dir('downloads') }
+def paperLibsDir = externalDepsDir.map { it.dir('paper-libraries') }
+def pluginCommonDir = externalDepsDir.map { it.dir('PluginCommon') }
+def pluginCommonJar = externalDepsDir.map { it.file('plugin-common/PluginCommon.jar') }
+
+def downloadedJars = [
+        paper      : downloadsDir.map { it.file('paper.jar') },
+        guava      : downloadsDir.map { it.file('guava-33.6.0-jre.jar') },
+        joml       : downloadsDir.map { it.file('joml-1.10.9.jar') },
+        protocolLib: downloadsDir.map { it.file('ProtocolLib.jar') },
+]
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+    withSourcesJar()
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src']
+        }
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+tasks.register('downloadExternalDependencies') {
+    outputs.files(downloadedJars.values())
+
+    doLast {
+        downloadsDir.get().asFile.mkdirs()
+
+        [
+                paper      : 'paperJarUrl',
+                guava      : 'guavaJarUrl',
+                joml       : 'jomlJarUrl',
+                protocolLib: 'protocolLibJarUrl',
+        ].each { jarName, propertyName ->
+            def target = downloadedJars[jarName].get().asFile
+            if (target.isFile() && target.length() > 0) {
+                return
+            }
+
+            def url = dependencyUrls.getProperty(propertyName)
+            if (!url) {
+                throw new GradleException("Missing ${propertyName} in ${dependencyUrlsFile.asFile}")
+            }
+
+            logger.lifecycle("Downloading ${url}")
+            target.parentFile.mkdirs()
+            def tempFile = new File(target.parentFile, "${target.name}.tmp")
+            new URI(url).toURL().withInputStream { input ->
+                Files.copy(input, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+            Files.move(tempFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+    }
+}
+
+tasks.register('extractPaperLibraries', Copy) {
+    dependsOn(tasks.named('downloadExternalDependencies'))
+    from(zipTree(downloadedJars.paper)) {
+        include '**/*.jar'
+    }
+    into(paperLibsDir)
+}
+
+tasks.register('clonePluginCommon') {
+    outputs.dir(pluginCommonDir)
+
+    doLast {
+        def repoUrl = dependencyUrls.getProperty('pluginCommonRepoUrl')
+        if (!repoUrl) {
+            throw new GradleException("Missing pluginCommonRepoUrl in ${dependencyUrlsFile.asFile}")
+        }
+
+        def checkoutDir = pluginCommonDir.get().asFile
+        if (new File(checkoutDir, '.git').isDirectory()) {
+            providers.exec {
+                workingDir checkoutDir
+                commandLine 'git', 'pull', '--ff-only'
+            }.result.get().assertNormalExitValue()
+        } else {
+            checkoutDir.parentFile.mkdirs()
+            providers.exec {
+                commandLine 'git', 'clone', repoUrl, checkoutDir.absolutePath
+            }.result.get().assertNormalExitValue()
+        }
+    }
+}
+
+tasks.register('buildPluginCommon') {
+    dependsOn(tasks.named('clonePluginCommon'))
+    outputs.file(pluginCommonJar)
+
+    doLast {
+        def checkoutDir = pluginCommonDir.get().asFile
+
+        if (new File(checkoutDir, 'gradlew').isFile()) {
+            providers.exec {
+                workingDir checkoutDir
+                commandLine './gradlew', 'build'
+            }.result.get().assertNormalExitValue()
+        } else if (new File(checkoutDir, 'build.gradle').isFile()
+                || new File(checkoutDir, 'build.gradle.kts').isFile()) {
+            providers.exec {
+                workingDir checkoutDir
+                commandLine 'gradle', 'build'
+            }.result.get().assertNormalExitValue()
+        } else {
+            throw new GradleException("Cannot build PluginCommon: no Gradle build was found in ${checkoutDir}")
+        }
+
+        def candidates = [
+                new File(checkoutDir, 'out/PluginCommon.jar'),
+                new File(checkoutDir, 'out/artifacts/PluginCommon/PluginCommon.jar'),
+                new File(checkoutDir, 'build/libs/PluginCommon.jar'),
+        ]
+
+        def builtJar = candidates.find { it.isFile() }
+        if (builtJar == null) {
+            builtJar = fileTree(checkoutDir) {
+                include 'out/**/*.jar'
+                include 'build/libs/**/*.jar'
+            }.files.find { it.name == 'PluginCommon.jar' }
+        }
+
+        if (builtJar == null) {
+            throw new GradleException("PluginCommon built, but PluginCommon.jar was not found under ${checkoutDir}/out or ${checkoutDir}/build/libs")
+        }
+
+        def target = pluginCommonJar.get().asFile
+        target.parentFile.mkdirs()
+        Files.copy(builtJar.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
+tasks.register('prepareExternalDependencies') {
+    dependsOn(
+            tasks.named('downloadExternalDependencies'),
+            tasks.named('extractPaperLibraries'),
+            tasks.named('buildPluginCommon')
+    )
+}
+
+dependencies {
+    compileOnly files(downloadedJars.paper)
+    compileOnly fileTree(paperLibsDir) {
+        include '**/*.jar'
+    }
+    compileOnly files(downloadedJars.guava, downloadedJars.joml, downloadedJars.protocolLib, pluginCommonJar)
+}
+
+tasks.withType(JavaCompile).configureEach {
+    dependsOn(tasks.named('prepareExternalDependencies'))
+    options.encoding = 'UTF-8'
+    options.release = 25
+}
+
+tasks.named('jar') {
+    archiveBaseName = 'PluginCommonPacket'
+    destinationDirectory = layout.projectDirectory.dir('out')
+}

@@ -1,2 +1,12 @@
 .idea/
+
+# Ignore Gradle project-specific cache directory
+.gradle
+lib/
 out/
+
+# Ignore Gradle build output directory
+build
+
+# Ignore Kotlin plugin data
+.kotlin
