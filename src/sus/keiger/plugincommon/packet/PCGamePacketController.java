@@ -44,7 +44,7 @@ public class PCGamePacketController implements IGamePacketController, PacketList
         RegisterPacket(PacketType.Play.Server.BLOCK_BREAK_ANIMATION, SetBlockDestroyStagePacket.class, SetBlockDestroyStagePacket::new);
 
         RegisterPacket(PacketType.Play.Client.ITEM_NAME, RenameItemPacket.class, RenameItemPacket::new);
-        //RegisterPacket(PacketType.Play.Client.BLOCK_DIG, PlayerActionPacket.class, PlayerActionPacket::new);
+        RegisterPacket(PacketType.Play.Client.BLOCK_DIG, PlayerActionPacket.class, PlayerActionPacket::new);
 
         _sendingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes()).build();
         _receivingWhitelist = ListeningWhitelist.newBuilder().normal().types(GetRegisteredPacketTypes())
