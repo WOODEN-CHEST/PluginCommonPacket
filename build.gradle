@@ -1,26 +1,315 @@
+import groovy.io.FileType
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.security.MessageDigest
+import javax.inject.Inject
+import org.gradle.process.ExecOperations
+import org.gradle.process.ExecSpec
 
 plugins {
     id 'java-library'
 }
 
-def dependencyUrlsFile = layout.projectDirectory.file('gradle/dependency-urls.properties')
-def dependencyUrls = new Properties()
-dependencyUrlsFile.asFile.withInputStream { dependencyUrls.load(it) }
+/*
+ * Downloads a file and refuses to hand it to the rest of the build unless its content matches the
+ * pinned SHA-256, so a replaced or tampered remote artifact fails the build instead of silently
+ * being compiled against.
+ */
+abstract class DownloadVerifiedFile extends DefaultTask {
+    @Input
+    abstract Property<String> getSourceUrl()
+
+    @Input
+    abstract Property<String> getSha256()
+
+    @Internal
+    abstract Property<String> getChecksumLocation()
+
+    @OutputFile
+    abstract RegularFileProperty getDestinationFile()
+
+    @TaskAction
+    void downloadAndVerify() {
+        def url = sourceUrl.get()
+        def target = destinationFile.get().asFile
+        def expectedChecksum = sha256.get().toLowerCase()
+
+        /* Task implementations declared in a build script are part of every up-to-date check, so
+         * editing this file alone re-runs the download tasks. Re-checking the file already on disk
+         * keeps that cheap without trusting it: content that does not match the pin is downloaded
+         * again. */
+        if (target.isFile() && sha256Of(target) == expectedChecksum) {
+            logger.info("${target.name} already matches the pinned checksum")
+            didWork = false
+            return
+        }
+
+        Files.createDirectories(target.parentFile.toPath())
+        def temporaryFile = new File(target.parentFile, "${target.name}.tmp")
+
+        logger.lifecycle("Downloading ${url}")
+        new URI(url).toURL().withInputStream { input ->
+            Files.copy(input, temporaryFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        }
+
+        def actualChecksum = sha256Of(temporaryFile)
+        if (actualChecksum != expectedChecksum) {
+            temporaryFile.delete()
+            throw new GradleException("Checksum mismatch for ${url}\n"
+                    + "  expected SHA-256: ${expectedChecksum}\n"
+                    + "    actual SHA-256: ${actualChecksum}\n"
+                    + "The remote file is not the one this build was pinned to. Review the new file,"
+                    + " then update ${checksumLocation.get()} if it is legitimate.")
+        }
+
+        Files.move(temporaryFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    private static String sha256Of(File file) {
+        def digest = MessageDigest.getInstance('SHA-256')
+        file.withInputStream { input ->
+            def buffer = new byte[8192]
+            int read
+            while ((read = input.read(buffer)) != -1) {
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().encodeHex().toString()
+    }
+}
+
+/*
+ * Checks a repository out at one exact commit and verifies that HEAD really landed there. Only the
+ * pinned commit is fetched when the server allows it, so neither a moved branch nor a rewritten
+ * history can change what gets built.
+ *
+ * The declared output is a stamp file holding the resolved commit rather than the checkout itself:
+ * the nested build writes its own output into the checkout, and snapshotting that whole tree would
+ * make this task look out of date on every run.
+ */
+abstract class CheckoutGitCommit extends DefaultTask {
+    @Input
+    abstract Property<String> getRepositoryUrl()
+
+    @Input
+    abstract Property<String> getCommit()
+
+    @Internal
+    abstract DirectoryProperty getCheckoutDirectory()
+
+    @Internal
+    abstract Property<String> getCommitLocation()
+
+    @OutputFile
+    abstract RegularFileProperty getCommitStampFile()
+
+    @Inject
+    abstract ExecOperations getExecOperations()
+
+    @TaskAction
+    void checkoutPinnedCommit() {
+        def checkoutDir = checkoutDirectory.get().asFile
+        def url = repositoryUrl.get()
+        def pinnedCommit = commit.get().toLowerCase()
+
+        if (!(pinnedCommit ==~ /[0-9a-f]{40}/)) {
+            throw new GradleException("A full 40 character commit SHA is required to pin"
+                    + " ${url}, but '${commit.get()}' was given")
+        }
+
+        Files.createDirectories(checkoutDir.toPath())
+        if (!new File(checkoutDir, '.git').isDirectory()) {
+            runGit(checkoutDir, ['init', '--quiet'])
+        }
+
+        if (gitOutput(checkoutDir, ['remote']).readLines()*.trim().contains('origin')) {
+            runGit(checkoutDir, ['remote', 'set-url', 'origin', url])
+        } else {
+            runGit(checkoutDir, ['remote', 'add', 'origin', url])
+        }
+
+        if (runGitIgnoringFailure(checkoutDir, ['fetch', '--depth', '1', '--no-tags', 'origin', pinnedCommit]) != 0) {
+            logger.lifecycle("Fetching ${pinnedCommit} directly was refused, falling back to a full fetch")
+            runGit(checkoutDir, ['fetch', '--no-tags', 'origin'])
+        }
+
+        /* Checked before checking out so that a pin the repository does not contain reports itself
+         * instead of surfacing as a bare git exit code. */
+        if (runGitIgnoringFailure(checkoutDir, ['cat-file', '-e', "${pinnedCommit}^{commit}"]) != 0) {
+            throw new GradleException("${url} has no commit ${pinnedCommit}."
+                    + " Update ${commitLocation.get()} to a commit that exists in the repository.")
+        }
+
+        runGit(checkoutDir, ['-c', 'advice.detachedHead=false', 'checkout', '--force', '--detach', pinnedCommit])
+
+        def head = gitOutput(checkoutDir, ['rev-parse', 'HEAD'])
+        if (head != pinnedCommit) {
+            throw new GradleException("Expected ${checkoutDir} to be checked out at ${pinnedCommit},"
+                    + " but it is at ${head}")
+        }
+
+        def stampFile = commitStampFile.get().asFile
+        Files.createDirectories(stampFile.parentFile.toPath())
+        stampFile.text = "${head}\n"
+    }
+
+    /*
+     * Fetching a public repository needs no credentials, so every credential source is switched
+     * off: left enabled, a transient server error turns into a credential prompt, and on Windows
+     * that is a GUI dialog no build is ever going to answer. Failing immediately and loudly beats
+     * hanging.
+     */
+    private static void configureGit(ExecSpec spec, File workingDirectory, List<String> arguments) {
+        spec.workingDir = workingDirectory
+        spec.commandLine = ['git', '-c', 'credential.helper=', '-c', 'core.askPass='] + arguments
+        spec.environment('GIT_TERMINAL_PROMPT', '0')
+        spec.environment('GIT_ASKPASS', 'echo')
+        spec.environment('GCM_INTERACTIVE', 'never')
+    }
+
+    private void runGit(File workingDirectory, List<String> arguments) {
+        execOperations.exec {
+            CheckoutGitCommit.configureGit(it, workingDirectory, arguments)
+        }.assertNormalExitValue()
+    }
+
+    /* Used for calls that are allowed to fail, so git's own error output is buffered instead of
+     * being printed as if the build had broken. */
+    private int runGitIgnoringFailure(File workingDirectory, List<String> arguments) {
+        def errorOutput = new ByteArrayOutputStream()
+        def exitValue = execOperations.exec {
+            CheckoutGitCommit.configureGit(it, workingDirectory, arguments)
+            it.errorOutput = errorOutput
+            it.ignoreExitValue = true
+        }.exitValue
+
+        if (exitValue != 0) {
+            logger.info("git ${arguments.join(' ')} failed with exit code ${exitValue}: ${errorOutput.toString('UTF-8').trim()}")
+        }
+        return exitValue
+    }
+
+    private String gitOutput(File workingDirectory, List<String> arguments) {
+        def output = new ByteArrayOutputStream()
+        execOperations.exec {
+            CheckoutGitCommit.configureGit(it, workingDirectory, arguments)
+            it.standardOutput = output
+        }.assertNormalExitValue()
+        return output.toString('UTF-8').trim()
+    }
+}
+
+/*
+ * Builds a checked out Gradle project and copies one of its artifacts into this build.
+ *
+ * The gradlew / gradlew.bat scripts are only platform specific launchers for
+ * org.gradle.wrapper.GradleWrapperMain, so this task runs that class directly instead of shelling
+ * out to a script. That keeps a single, platform independent code path.
+ */
+abstract class BuildExternalGradleProject extends DefaultTask {
+    @Internal
+    abstract DirectoryProperty getExternalProjectDirectory()
+
+    /* Used only when the checked out project ships no wrapper of its own. */
+    @Internal
+    abstract RegularFileProperty getFallbackWrapperJar()
+
+    /* Rebuilds when the checked out revision changes. */
+    @InputFile
+    abstract RegularFileProperty getRevisionStampFile()
+
+    @Input
+    abstract ListProperty<String> getTaskNames()
+
+    @Input
+    abstract Property<String> getArtifactFileName()
+
+    @OutputFile
+    abstract RegularFileProperty getArtifactDestination()
+
+    @Inject
+    abstract ExecOperations getExecOperations()
+
+    @TaskAction
+    void buildAndCopyArtifact() {
+        def projectDirectory = externalProjectDirectory.get().asFile
+        if (!new File(projectDirectory, 'build.gradle').isFile()
+                && !new File(projectDirectory, 'build.gradle.kts').isFile()) {
+            throw new GradleException("Cannot build ${projectDirectory}: no Gradle build was found")
+        }
+
+        /* Prefer the checked out project's own wrapper so it builds with the Gradle version it
+         * pins. Resolved here rather than at configuration time, because probing the checkout
+         * before it exists would invalidate the configuration cache on the following build. */
+        def wrapperJar = new File(projectDirectory, 'gradle/wrapper/gradle-wrapper.jar')
+        if (!wrapperJar.isFile()) {
+            wrapperJar = fallbackWrapperJar.get().asFile
+            if (!wrapperJar.isFile()) {
+                throw new GradleException("${projectDirectory.name} ships no Gradle wrapper and this"
+                        + " project's own wrapper jar is missing at ${wrapperJar}")
+            }
+        }
+
+        execOperations.javaexec {
+            it.workingDir = projectDirectory
+            it.classpath(wrapperJar)
+            it.mainClass = 'org.gradle.wrapper.GradleWrapperMain'
+            it.args = ['--project-dir', projectDirectory.absolutePath] + taskNames.get()
+        }.assertNormalExitValue()
+
+        def artifactName = artifactFileName.get()
+        def searchDirectories = [new File(projectDirectory, 'out'), new File(projectDirectory, 'build/libs')]
+        def builtArtifact = searchDirectories.findResult { searchDirectory ->
+            if (!searchDirectory.isDirectory()) {
+                return null
+            }
+
+            def match = null
+            searchDirectory.eachFileRecurse(FileType.FILES) { candidate ->
+                if (match == null && candidate.name == artifactName) {
+                    match = candidate
+                }
+            }
+            match
+        }
+
+        if (builtArtifact == null) {
+            throw new GradleException("${projectDirectory.name} built, but ${artifactName} was not found under "
+                    + searchDirectories.join(' or '))
+        }
+
+        def target = artifactDestination.get().asFile
+        Files.createDirectories(target.parentFile.toPath())
+        Files.copy(builtArtifact.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+    }
+}
+
+/*
+ * Pinned URLs, checksums and commits. Read through a file content provider so that the value, not
+ * the act of reading the file, is what the build depends on; reading it eagerly here would make the
+ * build incompatible with the configuration cache.
+ */
+def dependencyPinsFile = layout.projectDirectory.file('gradle/dependency-urls.properties')
+def dependencyPins = providers.fileContents(dependencyPinsFile).asText.map { text ->
+    def properties = new Properties()
+    properties.load(new StringReader(text))
+    return properties
+}
+def pinnedValue = { String propertyName ->
+    dependencyPins.map { properties ->
+        def value = properties.getProperty(propertyName)
+        if (!value) {
+            throw new GradleException("Missing ${propertyName} in ${dependencyPinsFile.asFile}")
+        }
+        return value
+    }
+}
+def pinsFileLocation = dependencyPinsFile.asFile.name
 
 def externalDepsDir = layout.buildDirectory.dir('external-deps')
 def downloadsDir = externalDepsDir.map { it.dir('downloads') }
 def paperLibsDir = externalDepsDir.map { it.dir('paper-libraries') }
 def pluginCommonDir = externalDepsDir.map { it.dir('PluginCommon') }
-def pluginCommonJar = externalDepsDir.map { it.file('plugin-common/PluginCommon.jar') }
-
-def downloadedJars = [
-        paper      : downloadsDir.map { it.file('paper.jar') },
-        guava      : downloadsDir.map { it.file('guava-33.6.0-jre.jar') },
-        joml       : downloadsDir.map { it.file('joml-1.10.9.jar') },
-        protocolLib: downloadsDir.map { it.file('ProtocolLib.jar') },
-]
 
 java {
     toolchain {
@@ -34,6 +323,11 @@ sourceSets {
         java {
             srcDirs = ['src']
         }
+        /* The java sources live in src/ rather than src/main/java, so point resources somewhere
+         * that matches instead of leaving it at the unused src/main/resources default. */
+        resources {
+            srcDirs = ['resources']
+        }
     }
 }
 
@@ -41,140 +335,88 @@ repositories {
     mavenCentral()
 }
 
-tasks.register('downloadExternalDependencies') {
-    outputs.files(downloadedJars.values())
-
-    doLast {
-        downloadsDir.get().asFile.mkdirs()
-
-        [
-                paper      : 'paperJarUrl',
-                guava      : 'guavaJarUrl',
-                joml       : 'jomlJarUrl',
-                protocolLib: 'protocolLibJarUrl',
-        ].each { jarName, propertyName ->
-            def target = downloadedJars[jarName].get().asFile
-            if (target.isFile() && target.length() > 0) {
-                return
-            }
-
-            def url = dependencyUrls.getProperty(propertyName)
-            if (!url) {
-                throw new GradleException("Missing ${propertyName} in ${dependencyUrlsFile.asFile}")
-            }
-
-            logger.lifecycle("Downloading ${url}")
-            target.parentFile.mkdirs()
-            def tempFile = new File(target.parentFile, "${target.name}.tmp")
-            new URI(url).toURL().withInputStream { input ->
-                Files.copy(input, tempFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
-            Files.move(tempFile.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-        }
-    }
+def downloadPaperJar = tasks.register('downloadPaperJar', DownloadVerifiedFile) {
+    sourceUrl = pinnedValue('paperJarUrl')
+    sha256 = pinnedValue('paperJarSha256')
+    checksumLocation = pinsFileLocation
+    destinationFile = downloadsDir.map { it.file('paper.jar') }
 }
 
-tasks.register('extractPaperLibraries', Copy) {
-    dependsOn(tasks.named('downloadExternalDependencies'))
-    from(zipTree(downloadedJars.paper)) {
+def downloadProtocolLibJar = tasks.register('downloadProtocolLibJar', DownloadVerifiedFile) {
+    sourceUrl = pinnedValue('protocolLibJarUrl')
+    sha256 = pinnedValue('protocolLibJarSha256')
+    checksumLocation = pinsFileLocation
+    destinationFile = downloadsDir.map { it.file('ProtocolLib.jar') }
+}
+
+tasks.register('downloadExternalDependencies') {
+    dependsOn(downloadPaperJar, downloadProtocolLibJar)
+}
+
+def extractPaperLibraries = tasks.register('extractPaperLibraries', Copy) {
+    from(zipTree(downloadPaperJar.flatMap { it.destinationFile })) {
         include '**/*.jar'
     }
     into(paperLibsDir)
 }
 
-tasks.register('clonePluginCommon') {
-    outputs.dir(pluginCommonDir)
-
-    doLast {
-        def repoUrl = dependencyUrls.getProperty('pluginCommonRepoUrl')
-        if (!repoUrl) {
-            throw new GradleException("Missing pluginCommonRepoUrl in ${dependencyUrlsFile.asFile}")
-        }
-
-        def checkoutDir = pluginCommonDir.get().asFile
-        if (new File(checkoutDir, '.git').isDirectory()) {
-            providers.exec {
-                workingDir checkoutDir
-                commandLine 'git', 'pull', '--ff-only'
-            }.result.get().assertNormalExitValue()
-        } else {
-            checkoutDir.parentFile.mkdirs()
-            providers.exec {
-                commandLine 'git', 'clone', repoUrl, checkoutDir.absolutePath
-            }.result.get().assertNormalExitValue()
-        }
-    }
+def checkoutPluginCommon = tasks.register('checkoutPluginCommon', CheckoutGitCommit) {
+    repositoryUrl = pinnedValue('pluginCommonRepoUrl')
+    commit = pinnedValue('pluginCommonCommit')
+    commitLocation = pinsFileLocation
+    checkoutDirectory = pluginCommonDir
+    commitStampFile = externalDepsDir.map { it.file('plugin-common/checked-out-commit.txt') }
 }
 
-tasks.register('buildPluginCommon') {
-    dependsOn(tasks.named('clonePluginCommon'))
-    outputs.file(pluginCommonJar)
-
-    doLast {
-        def checkoutDir = pluginCommonDir.get().asFile
-
-        if (new File(checkoutDir, 'gradlew').isFile()) {
-            providers.exec {
-                workingDir checkoutDir
-                commandLine './gradlew', 'build'
-            }.result.get().assertNormalExitValue()
-        } else if (new File(checkoutDir, 'build.gradle').isFile()
-                || new File(checkoutDir, 'build.gradle.kts').isFile()) {
-            providers.exec {
-                workingDir checkoutDir
-                commandLine 'gradle', 'build'
-            }.result.get().assertNormalExitValue()
-        } else {
-            throw new GradleException("Cannot build PluginCommon: no Gradle build was found in ${checkoutDir}")
-        }
-
-        def candidates = [
-                new File(checkoutDir, 'out/PluginCommon.jar'),
-                new File(checkoutDir, 'out/artifacts/PluginCommon/PluginCommon.jar'),
-                new File(checkoutDir, 'build/libs/PluginCommon.jar'),
-        ]
-
-        def builtJar = candidates.find { it.isFile() }
-        if (builtJar == null) {
-            builtJar = fileTree(checkoutDir) {
-                include 'out/**/*.jar'
-                include 'build/libs/**/*.jar'
-            }.files.find { it.name == 'PluginCommon.jar' }
-        }
-
-        if (builtJar == null) {
-            throw new GradleException("PluginCommon built, but PluginCommon.jar was not found under ${checkoutDir}/out or ${checkoutDir}/build/libs")
-        }
-
-        def target = pluginCommonJar.get().asFile
-        target.parentFile.mkdirs()
-        Files.copy(builtJar.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
-    }
+def buildPluginCommon = tasks.register('buildPluginCommon', BuildExternalGradleProject) {
+    externalProjectDirectory = pluginCommonDir
+    revisionStampFile = checkoutPluginCommon.flatMap { it.commitStampFile }
+    fallbackWrapperJar = layout.projectDirectory.file('gradle/wrapper/gradle-wrapper.jar')
+    taskNames = ['build']
+    artifactFileName = 'PluginCommon.jar'
+    artifactDestination = externalDepsDir.map { it.file('plugin-common/PluginCommon.jar') }
 }
 
 tasks.register('prepareExternalDependencies') {
-    dependsOn(
-            tasks.named('downloadExternalDependencies'),
-            tasks.named('extractPaperLibraries'),
-            tasks.named('buildPluginCommon')
-    )
+    dependsOn(downloadPaperJar, downloadProtocolLibJar, extractPaperLibraries, buildPluginCommon)
 }
 
+/*
+ * Referencing the producing tasks (rather than their output paths) is what carries the task
+ * dependency into the compile classpath, so compilation no longer relies on a blanket dependsOn.
+ */
+def paperLibraryJars = fileTree(paperLibsDir) {
+    include '**/*.jar'
+}.builtBy(extractPaperLibraries)
+
 dependencies {
-    compileOnly files(downloadedJars.paper)
-    compileOnly fileTree(paperLibsDir) {
-        include '**/*.jar'
-    }
-    compileOnly files(downloadedJars.guava, downloadedJars.joml, downloadedJars.protocolLib, pluginCommonJar)
+    compileOnly files(downloadPaperJar)
+    compileOnly paperLibraryJars
+    compileOnly files(downloadProtocolLibJar)
+    compileOnly files(buildPluginCommon)
+
+    /* Versions in gradle/libs.versions.toml, checksums in gradle/verification-metadata.xml. */
+    compileOnly libs.guava
+    compileOnly libs.joml
 }
 
 tasks.withType(JavaCompile).configureEach {
-    dependsOn(tasks.named('prepareExternalDependencies'))
     options.encoding = 'UTF-8'
     options.release = 25
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
 }
 
 tasks.named('jar') {
     archiveBaseName = 'PluginCommonPacket'
     destinationDirectory = layout.projectDirectory.dir('out')
+}
+
+tasks.named('wrapper', Wrapper) {
+    gradleVersion = '9.5.1'
+    distributionType = Wrapper.DistributionType.BIN
+    distributionSha256Sum = 'bafc141b619ad6350fd975fc903156dd5c151998cc8b058e8c1044ab5f7b031f'
 }
