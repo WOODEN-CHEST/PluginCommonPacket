@@ -38,6 +38,7 @@ public class PlayerInfoRemovePacket extends ClientBoundGamePacket
     public void SetUUIDs(List<UUID> uuids)
     {
         _playerUUIDs = List.copyOf(Objects.requireNonNull(uuids, "uuids is null"));
+        MarkModified();
     }
 
     public List<UUID> GetUUIDs()

@@ -33,7 +33,9 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     {
         super(ID);
 
-        PlayerActionStatus.GetStatusByDigType(packet.getPlayerDigTypes().read(0)).ifPresent(this::SetAction);
+        EnumWrappers.PlayerDigType DigType = packet.getPlayerDigTypes().read(0);
+        SetAction(PlayerActionStatus.GetStatusByDigType(DigType).orElseThrow(() ->
+                new IllegalArgumentException("Unknown player action: %s".formatted(DigType))));
         SetPosition(packet.getBlockPositionModifier().read(0).toVector());
         PacketBlockFace.GetFaceByDirection(packet.getDirections().read(0)).ifPresent(this::SetFace);
         SetSequence(packet.getIntegers().read(0));
@@ -49,6 +51,7 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     public void SetAction(PlayerActionStatus action)
     {
         _action = Objects.requireNonNull(action, "action is null");
+        MarkModified();
     }
 
     public Vector GetPosition()
@@ -59,6 +62,7 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     public void SetPosition(Vector position)
     {
         _position = Objects.requireNonNull(position, "position is null");
+        MarkModified();
     }
 
     public PacketBlockFace GetFace()
@@ -69,6 +73,7 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     public void SetFace(PacketBlockFace face)
     {
         _face = Objects.requireNonNull(face, "face is null");
+        MarkModified();
     }
 
     public int GetSequence()
@@ -79,6 +84,7 @@ public class PlayerActionPacket extends ServerBoundGamePacket
     public void SetSequence(int sequence)
     {
         _sequence = sequence;
+        MarkModified();
     }
 
 

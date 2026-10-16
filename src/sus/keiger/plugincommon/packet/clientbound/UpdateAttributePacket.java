@@ -43,6 +43,7 @@ public class UpdateAttributePacket extends ClientBoundGamePacket
     public void SetAttributeInfo(List<AttributeInfo> attributeInfo)
     {
         _attributeInfo = Objects.requireNonNull(attributeInfo, "attributeInfo is null");
+        MarkModified();
     }
 
     public LivingEntity GetEntity()
@@ -53,6 +54,7 @@ public class UpdateAttributePacket extends ClientBoundGamePacket
     public void SetEntity(LivingEntity entity)
     {
         _targetEntity = Objects.requireNonNull(entity, "entity is null");
+        MarkModified();
     }
 
 
@@ -100,6 +102,16 @@ public class UpdateAttributePacket extends ClientBoundGamePacket
 
 
     // Inherited methods.
+    /**
+     * @return Always <code>true</code>: the attribute entries this packet hands out can be changed without the packet knowing,
+     * so it is always written again.
+     */
+    @Override
+    public boolean GetIsModified()
+    {
+        return true;
+    }
+
     @Override
     public PacketContainer CreatePacketContainer(ProtocolManager protocolManager)
     {

@@ -46,6 +46,7 @@ public class SetHealthPacket extends ClientBoundGamePacket
     public void SetHealth(float value)
     {
         _health = value;
+        MarkModified();
     }
 
     public int GetFood()
@@ -56,6 +57,7 @@ public class SetHealthPacket extends ClientBoundGamePacket
     public void SetFood(int value)
     {
         _food = value;
+        MarkModified();
     }
 
     public float GetSaturation()
@@ -66,6 +68,7 @@ public class SetHealthPacket extends ClientBoundGamePacket
     public void SetSaturation(float value)
     {
         _saturation = value;
+        MarkModified();
     }
 
 

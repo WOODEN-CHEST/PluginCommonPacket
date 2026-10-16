@@ -14,7 +14,8 @@ public enum PlayerActionStatus
     DropItemStack(EnumWrappers.PlayerDigType.DROP_ITEM),
     DropItem(EnumWrappers.PlayerDigType.DROP_ALL_ITEMS),
     UpdateItemStatus(EnumWrappers.PlayerDigType.RELEASE_USE_ITEM),
-    SwapItemInHand(EnumWrappers.PlayerDigType.SWAP_HELD_ITEMS);
+    SwapItemInHand(EnumWrappers.PlayerDigType.SWAP_HELD_ITEMS),
+    Stab(EnumWrappers.PlayerDigType.STAB);
 
 
     // Private static fields.

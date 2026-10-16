@@ -39,11 +39,13 @@ public class UnloadChunkPacket extends ClientBoundGamePacket
     public void SetChunkX(int x)
     {
         _chunkX = x;
+        MarkModified();
     }
 
     public void SetChunkZ(int z)
     {
         _chunkZ = z;
+        MarkModified();
     }
 
     public int GetChunkX()

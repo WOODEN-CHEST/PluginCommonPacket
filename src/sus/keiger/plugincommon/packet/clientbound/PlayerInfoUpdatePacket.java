@@ -73,6 +73,7 @@ public class PlayerInfoUpdatePacket extends ClientBoundGamePacket
     public void SetPlayerInfo(List<PacketPlayerInfo> info)
     {
         _playerInfo = List.copyOf(Objects.requireNonNull(info, "info is null"));
+        MarkModified();
     }
 
     public List<PacketPlayerInfo> GetPlayerInfo()
@@ -83,6 +84,7 @@ public class PlayerInfoUpdatePacket extends ClientBoundGamePacket
     public void SetPlayerInfoActions(Set<EnumWrappers.PlayerInfoAction> actions)
     {
         _actions = Set.copyOf(Objects.requireNonNull(actions, "actions is null"));
+        MarkModified();
     }
 
     public Set<EnumWrappers.PlayerInfoAction> GetPlayerInfoAction()
@@ -92,6 +94,16 @@ public class PlayerInfoUpdatePacket extends ClientBoundGamePacket
 
 
     // Inherited methods.
+    /**
+     * @return Always <code>true</code>: the player entries this packet hands out can be changed without the packet knowing,
+     * so it is always written again.
+     */
+    @Override
+    public boolean GetIsModified()
+    {
+        return true;
+    }
+
     @Override
     public PacketContainer CreatePacketContainer(ProtocolManager protocolManager)
     {

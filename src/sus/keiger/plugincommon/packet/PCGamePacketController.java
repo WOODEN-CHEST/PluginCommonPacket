@@ -23,6 +23,7 @@ public class PCGamePacketController implements IGamePacketController, PacketList
     private final ListeningWhitelist _sendingWhitelist;
     private final ListeningWhitelist _receivingWhitelist;
     private final Set<Class<? extends GamePacket>> _listenedPackets = new HashSet<>();
+    private final Set<PacketType> _undecodablePacketTypes = new HashSet<>();
 
 
 
@@ -97,16 +98,39 @@ public class PCGamePacketController implements IGamePacketController, PacketList
             return;
         }
 
-        T Packet = packetData.Constructor.apply(sourceEvent.getPacket());
+        T Packet;
+        try
+        {
+            Packet = packetData.Constructor.apply(sourceEvent.getPacket());
+        }
+        catch (RuntimeException exception)
+        {
+            ReportUndecodablePacket(packetData.PacketType, exception);
+            return;
+        }
+        Packet.SetIsModified(false);
 
         GamePacketEvent<T> PacketEvent = new GamePacketEvent<>(Packet, sourceEvent.getPlayer());
         genericEvent.FireEvent(PacketEvent);
         packetData.IOEvent.FireEvent(PacketEvent);
         sourceEvent.setCancelled(PacketEvent.GetIsCancelled());
 
-        if (!PacketEvent.GetIsCancelled())
+        if (!PacketEvent.GetIsCancelled() && Packet.GetIsModified())
         {
             sourceEvent.setPacket(Packet.CreatePacketContainer(_protocolManager));
+        }
+    }
+
+    /**
+     * Tells the plugin's log, once per packet type, that a packet couldn't be read, such as one which carries a value
+     * from a newer game version. Such a packet is passed on as it is, and no handler sees it.
+     */
+    private void ReportUndecodablePacket(PacketType type, RuntimeException exception)
+    {
+        if (_undecodablePacketTypes.add(type))
+        {
+            _plugin.getLogger().warning("Couldn't read a %s packet, so it is passed on untouched: %s"
+                    .formatted(type.name(), exception.getMessage()));
         }
     }
 

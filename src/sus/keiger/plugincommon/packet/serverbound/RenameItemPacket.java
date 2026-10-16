@@ -39,6 +39,7 @@ public class RenameItemPacket extends ServerBoundGamePacket
     public void SetItemName(String name)
     {
         _itemName = Objects.requireNonNull(name);
+        MarkModified();
     }
 
 

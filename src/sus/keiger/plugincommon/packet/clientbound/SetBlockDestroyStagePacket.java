@@ -38,7 +38,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
 
         SetCauseEntityID(packet.getIntegers().read(0));
         SetBlockLocation(packet.getBlockPositionModifier().read(0).toVector());
-        SetStage(packet.getBytes().read(0));
+        SetStage(packet.getIntegers().read(1));
     }
 
 
@@ -51,6 +51,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     public void SetStage(int stage)
     {
         _stage = (stage == STAGE_NONE) ? stage : Math.max(STAGE_MIN, Math.min(STAGE_MAX, stage));
+        MarkModified();
     }
 
     public int GetCauseEntityID()
@@ -61,6 +62,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     public void SetCauseEntityID(int entity)
     {
         _causeEntity = entity;
+        MarkModified();
     }
 
     public Vector GetBlockLocation()
@@ -71,6 +73,7 @@ public class SetBlockDestroyStagePacket extends ClientBoundGamePacket
     public void SetBlockLocation(Vector location)
     {
         _blockLocation = Objects.requireNonNull(location, "location is null");
+        MarkModified();
     }
 
 
